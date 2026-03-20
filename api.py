@@ -436,6 +436,86 @@ def delete_clip(clip_id: int, token: str = ""):
     conn.close()
     return {"success": True}
 
+# ─── DEMANDES SQUAD ───────────────────────────────────────────────────────────
+
+def init_demandes_db():
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS demandes (
+            id SERIAL PRIMARY KEY,
+            pseudo TEXT NOT NULL,
+            discord_id TEXT,
+            plateforme TEXT NOT NULL,
+            motivation TEXT NOT NULL,
+            statut TEXT DEFAULT 'en_attente',
+            message_admin TEXT,
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    """)
+    conn.commit()
+    cur.close()
+    conn.close()
+
+init_demandes_db()
+
+@app.get("/demandes")
+def get_demandes(token: str = ""):
+    if token != "ghost_admin_token_2026":
+        return {"error": "Non autorisé"}
+    conn = get_db()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT * FROM demandes ORDER BY created_at DESC")
+    demandes = cur.fetchall()
+    cur.close()
+    conn.close()
+    return [dict(d) for d in demandes]
+
+@app.post("/demandes/submit")
+def submit_demande(data: dict):
+    pseudo = data.get("pseudo", "").strip()
+    plateforme = data.get("plateforme", "").strip()
+    motivation = data.get("motivation", "").strip()
+    if not pseudo or not plateforme or not motivation:
+        return {"error": "Tous les champs sont requis"}
+    conn = get_db()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("""
+        INSERT INTO demandes (pseudo, discord_id, plateforme, motivation)
+        VALUES (%s, %s, %s, %s) RETURNING *
+    """, (pseudo, data.get("discord_id", ""), plateforme, motivation))
+    demande = cur.fetchone()
+    conn.commit()
+    cur.close()
+    conn.close()
+    return dict(demande)
+
+@app.post("/demandes/repondre")
+def repondre_demande(data: dict):
+    if data.get("token") != "ghost_admin_token_2026":
+        return {"error": "Non autorisé"}
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE demandes SET statut = %s, message_admin = %s WHERE id = %s
+    """, (data.get("statut"), data.get("message_admin", ""), data.get("id")))
+    conn.commit()
+    cur.close()
+    conn.close()
+    return {"success": True}
+
+@app.delete("/demandes/{demande_id}")
+def delete_demande(demande_id: int, token: str = ""):
+    if token != "ghost_admin_token_2026":
+        return {"error": "Non autorisé"}
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM demandes WHERE id = %s", (demande_id,))
+    conn.commit()
+    cur.close()
+    conn.close()
+    return {"success": True}
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8080)
