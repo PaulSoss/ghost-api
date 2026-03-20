@@ -350,6 +350,92 @@ def delete_message(msg_id: int, token: str = ""):
     conn.close()
     return {"success": True}
 
+# ─── CLIPS ────────────────────────────────────────────────────────────────────
+
+def init_clips_db():
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS clips (
+            id SERIAL PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            username TEXT,
+            titre TEXT NOT NULL,
+            description TEXT,
+            url TEXT,
+            type TEXT DEFAULT 'lien',
+            likes INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    """)
+    conn.commit()
+    cur.close()
+    conn.close()
+
+init_clips_db()
+
+@app.get("/clips")
+def get_clips():
+    conn = get_db()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT * FROM clips ORDER BY created_at DESC")
+    clips = cur.fetchall()
+    cur.close()
+    conn.close()
+    return [dict(c) for c in clips]
+
+@app.post("/clips/add")
+def add_clip(data: dict):
+    user_id = data.get("user_id")
+    if not user_id:
+        return {"error": "Non autorisé"}
+    conn = get_db()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT * FROM players WHERE user_id = %s", (user_id,))
+    if not cur.fetchone():
+        cur.close()
+        conn.close()
+        return {"error": "Membre introuvable"}
+    cur.execute("""
+        INSERT INTO clips (user_id, username, titre, description, url, type)
+        VALUES (%s, %s, %s, %s, %s, %s) RETURNING *
+    """, (
+        user_id,
+        data.get("username", f"#{user_id[-6:]}"),
+        data.get("titre"),
+        data.get("description", ""),
+        data.get("url", ""),
+        data.get("type", "lien")
+    ))
+    clip = cur.fetchone()
+    conn.commit()
+    cur.close()
+    conn.close()
+    return dict(clip)
+
+@app.post("/clips/like/{clip_id}")
+def like_clip(clip_id: int):
+    conn = get_db()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("UPDATE clips SET likes = likes + 1 WHERE id = %s RETURNING likes", (clip_id,))
+    result = cur.fetchone()
+    conn.commit()
+    cur.close()
+    conn.close()
+    return {"likes": result["likes"]}
+
+@app.delete("/clips/{clip_id}")
+def delete_clip(clip_id: int, token: str = ""):
+    if token != "ghost_admin_token_2026":
+        return {"error": "Non autorisé"}
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM clips WHERE id = %s", (clip_id,))
+    conn.commit()
+    cur.close()
+    conn.close()
+    return {"success": True}
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8080)
