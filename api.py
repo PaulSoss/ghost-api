@@ -649,3 +649,151 @@ def delete_presentation(user_id: str, token: str = ""):
     cur.close()
     conn.close()
     return {"success": True}
+
+# ─── COMPTES ──────────────────────────────────────────────────────────────────
+
+import hashlib
+import secrets
+
+def hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def init_accounts_db():
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS accounts (
+            id SERIAL PRIMARY KEY,
+            pseudo TEXT UNIQUE NOT NULL,
+            email TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL,
+            discord_id TEXT,
+            statut TEXT DEFAULT 'en_attente',
+            token TEXT,
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    """)
+    conn.commit()
+    cur.close()
+    conn.close()
+
+init_accounts_db()
+
+@app.post("/auth/inscription")
+def inscription(data: dict):
+    pseudo = data.get("pseudo", "").strip()
+    email = data.get("email", "").strip().lower()
+    password = data.get("password", "")
+    discord_id = data.get("discord_id", "").strip()
+    if not pseudo or not email or not password:
+        return {"error": "Tous les champs sont requis"}
+    if len(password) < 6:
+        return {"error": "Mot de passe trop court (min 6 caractères)"}
+    conn = get_db()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT id FROM accounts WHERE email = %s OR pseudo = %s", (email, pseudo))
+    if cur.fetchone():
+        cur.close()
+        conn.close()
+        return {"error": "Email ou pseudo déjà utilisé"}
+    hashed = hash_password(password)
+    cur.execute("""
+        INSERT INTO accounts (pseudo, email, password, discord_id, statut)
+        VALUES (%s, %s, %s, %s, 'en_attente') RETURNING id, pseudo, email, statut
+    """, (pseudo, email, hashed, discord_id))
+    account = cur.fetchone()
+    conn.commit()
+    cur.close()
+    conn.close()
+    return {"success": True, "message": "Compte créé ! En attente de validation par l'administrateur."}
+
+@app.post("/auth/connexion")
+def connexion(data: dict):
+    email = data.get("email", "").strip().lower()
+    password = data.get("password", "")
+    if not email or not password:
+        return {"error": "Email et mot de passe requis"}
+    conn = get_db()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT * FROM accounts WHERE email = %s", (email,))
+    account = cur.fetchone()
+    if not account or account["password"] != hash_password(password):
+        cur.close()
+        conn.close()
+        return {"error": "Email ou mot de passe incorrect"}
+    if account["statut"] == "en_attente":
+        cur.close()
+        conn.close()
+        return {"error": "Ton compte est en attente de validation par l'administrateur"}
+    if account["statut"] == "refuse":
+        cur.close()
+        conn.close()
+        return {"error": "Ton compte a été refusé. Contacte un administrateur."}
+    token = secrets.token_hex(32)
+    cur.execute("UPDATE accounts SET token = %s WHERE id = %s", (token, account["id"]))
+    conn.commit()
+    cur.close()
+    conn.close()
+    return {
+        "success": True,
+        "token": token,
+        "pseudo": account["pseudo"],
+        "discord_id": account["discord_id"],
+        "statut": account["statut"]
+    }
+
+@app.get("/auth/verify")
+def verify_token(token: str = ""):
+    if not token:
+        return {"error": "Token requis"}
+    conn = get_db()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT * FROM accounts WHERE token = %s", (token,))
+    account = cur.fetchone()
+    cur.close()
+    conn.close()
+    if not account:
+        return {"error": "Token invalide"}
+    return {
+        "success": True,
+        "pseudo": account["pseudo"],
+        "discord_id": account["discord_id"],
+        "statut": account["statut"]
+    }
+
+@app.get("/admin/comptes")
+def get_comptes(token: str = ""):
+    if token != "ghost_admin_token_2026":
+        return {"error": "Non autorisé"}
+    conn = get_db()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT id, pseudo, email, discord_id, statut, created_at FROM accounts ORDER BY created_at DESC")
+    comptes = cur.fetchall()
+    cur.close()
+    conn.close()
+    return [dict(c) for c in comptes]
+
+@app.post("/admin/comptes/valider")
+def valider_compte(data: dict):
+    if data.get("token") != "ghost_admin_token_2026":
+        return {"error": "Non autorisé"}
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("UPDATE accounts SET statut = %s WHERE id = %s", (data.get("statut"), data.get("id")))
+    conn.commit()
+    cur.close()
+    conn.close()
+    return {"success": True}
+
+@app.post("/auth/deconnexion")
+def deconnexion(data: dict):
+    token = data.get("token")
+    if not token:
+        return {"error": "Token requis"}
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("UPDATE accounts SET token = NULL WHERE token = %s", (token,))
+    conn.commit()
+    cur.close()
+    conn.close()
+    return {"success": True}
