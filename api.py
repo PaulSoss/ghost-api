@@ -13,6 +13,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ─── USERNAMES ────────────────────────────────────────────────────────────────
+
+USERNAMES = {
+    "746732917828354220": "Mazaa",
+    "308974671611822082": "Silv3rTheOne",
+    "416600327698120704": "TheWayneTV",
+    "792423747540746301": "Foxy-Snake",
+    "1255618873516884059": "BE_ToNio_13",
+    "583292176054878208": "Jahwild56",
+    "1304116365900255256": "Quirkybump",
+    "781963566064467969": "nasto17",
+    "819247548182953995": "darkdog",
+    "549277000066531358": "Lovaa_z",
+    "284431641705971713": "Goblin",
+}
+
+# ─── GRADES ───────────────────────────────────────────────────────────────────
+
 GRADES = [
     (50, "👑 Légende du champ de bataille"),
     (40, "🔥 Commandant"),
@@ -24,9 +42,27 @@ GRADES = [
     (1,  "🪖 Recrue"),
 ]
 
+# ─── DATABASE ─────────────────────────────────────────────────────────────────
+
 def get_db():
     url = "postgresql://postgres:cXjcpmwvNCvKutTmqobyPeqjnJqsqyyt@tramway.proxy.rlwy.net:26562/railway"
     return psycopg2.connect(url, sslmode="require")
+
+def init_db():
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS players (
+            user_id TEXT PRIMARY KEY,
+            xp INTEGER DEFAULT 0,
+            level INTEGER DEFAULT 1,
+            total_kills INTEGER DEFAULT 0,
+            total_captures INTEGER DEFAULT 0
+        )
+    """)
+    conn.commit()
+    cur.close()
+    conn.close()
 
 def get_grade(level: int) -> str:
     for min_level, grade in GRADES:
@@ -52,6 +88,15 @@ def xp_in_current_level(xp: int, level: int) -> int:
         spent += xp_for_next_level(l)
     return xp - spent
 
+def get_username(user_id: str) -> str:
+    return USERNAMES.get(user_id, f"#{user_id[-6:]}")
+
+# ─── INIT ─────────────────────────────────────────────────────────────────────
+
+init_db()
+
+# ─── ROUTES ───────────────────────────────────────────────────────────────────
+
 @app.get("/")
 def root():
     return {"status": "Ghost XP API en ligne ✅"}
@@ -64,7 +109,6 @@ def classement():
     players = cur.fetchall()
     cur.close()
     conn.close()
-
     result = []
     for i, p in enumerate(players):
         level = p["level"]
@@ -74,6 +118,7 @@ def classement():
         result.append({
             "rank": i + 1,
             "user_id": p["user_id"],
+            "username": get_username(p["user_id"]),
             "xp": xp_total,
             "level": level,
             "grade": get_grade(level),
@@ -92,17 +137,15 @@ def profil(user_id: str):
     p = cur.fetchone()
     cur.close()
     conn.close()
-
     if not p:
         return {"error": "Joueur introuvable"}
-
     level = p["level"]
     xp_total = p["xp"]
     xp_current = xp_in_current_level(xp_total, level)
     xp_needed = xp_for_next_level(level)
-
     return {
         "user_id": p["user_id"],
+        "username": get_username(p["user_id"]),
         "xp": xp_total,
         "level": level,
         "grade": get_grade(level),
@@ -126,7 +169,9 @@ def stats():
         "niveau_max": row["max_level"],
     }
 
-ADMIN_PASSWORD = "ghostxp2026"  # Change ce mot de passe !
+# ─── ADMIN ────────────────────────────────────────────────────────────────────
+
+ADMIN_PASSWORD = "ghostxp2026"
 
 @app.post("/admin/login")
 def admin_login(data: dict):
@@ -198,7 +243,7 @@ def admin_resetxp(data: dict):
     cur.close()
     conn.close()
     return {"success": True}
-    
+
 # ─── ÉVÉNEMENTS ───────────────────────────────────────────────────────────────
 
 def init_events_db():
@@ -241,14 +286,8 @@ def create_event(data: dict):
     cur.execute("""
         INSERT INTO events (titre, description, date_debut, date_fin, bonus_xp, statut)
         VALUES (%s, %s, %s, %s, %s, %s) RETURNING *
-    """, (
-        data.get("titre"),
-        data.get("description"),
-        data.get("date_debut"),
-        data.get("date_fin"),
-        data.get("bonus_xp", 0),
-        data.get("statut", "a_venir")
-    ))
+    """, (data.get("titre"), data.get("description"), data.get("date_debut"),
+          data.get("date_fin"), data.get("bonus_xp", 0), data.get("statut", "a_venir")))
     event = cur.fetchone()
     conn.commit()
     cur.close()
@@ -273,9 +312,7 @@ def update_event(data: dict):
         return {"error": "Non autorisé"}
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("""
-        UPDATE events SET statut = %s WHERE id = %s
-    """, (data.get("statut"), data.get("id")))
+    cur.execute("UPDATE events SET statut = %s WHERE id = %s", (data.get("statut"), data.get("id")))
     conn.commit()
     cur.close()
     conn.close()
@@ -319,19 +356,16 @@ def send_message(data: dict):
         return {"error": "Paramètres invalides"}
     if len(content) > 500:
         return {"error": "Message trop long"}
-    # Vérifier que le membre existe
     conn = get_db()
     cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("SELECT * FROM players WHERE user_id = %s AND xp >= 0", (user_id,))
-    player = cur.fetchone()
-    if not player:
+    cur.execute("SELECT * FROM players WHERE user_id = %s", (user_id,))
+    if not cur.fetchone():
         cur.close()
         conn.close()
         return {"error": "Membre introuvable"}
-    cur.execute("""
-        INSERT INTO messages (user_id, username, content)
-        VALUES (%s, %s, %s) RETURNING *
-    """, (user_id, data.get("username", f"#{user_id[-6:]}"), content))
+    username = get_username(user_id)
+    cur.execute("INSERT INTO messages (user_id, username, content) VALUES (%s, %s, %s) RETURNING *",
+        (user_id, username, content))
     msg = cur.fetchone()
     conn.commit()
     cur.close()
@@ -396,17 +430,11 @@ def add_clip(data: dict):
         cur.close()
         conn.close()
         return {"error": "Membre introuvable"}
+    username = get_username(user_id)
     cur.execute("""
         INSERT INTO clips (user_id, username, titre, description, url, type)
         VALUES (%s, %s, %s, %s, %s, %s) RETURNING *
-    """, (
-        user_id,
-        data.get("username", f"#{user_id[-6:]}"),
-        data.get("titre"),
-        data.get("description", ""),
-        data.get("url", ""),
-        data.get("type", "lien")
-    ))
+    """, (user_id, username, data.get("titre"), data.get("description", ""), data.get("url", ""), data.get("type", "lien")))
     clip = cur.fetchone()
     conn.commit()
     cur.close()
@@ -436,7 +464,7 @@ def delete_clip(clip_id: int, token: str = ""):
     conn.close()
     return {"success": True}
 
-# ─── DEMANDES SQUAD ───────────────────────────────────────────────────────────
+# ─── DEMANDES ─────────────────────────────────────────────────────────────────
 
 def init_demandes_db():
     conn = get_db()
@@ -480,10 +508,8 @@ def submit_demande(data: dict):
         return {"error": "Tous les champs sont requis"}
     conn = get_db()
     cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("""
-        INSERT INTO demandes (pseudo, discord_id, plateforme, motivation)
-        VALUES (%s, %s, %s, %s) RETURNING *
-    """, (pseudo, data.get("discord_id", ""), plateforme, motivation))
+    cur.execute("INSERT INTO demandes (pseudo, discord_id, plateforme, motivation) VALUES (%s, %s, %s, %s) RETURNING *",
+        (pseudo, data.get("discord_id", ""), plateforme, motivation))
     demande = cur.fetchone()
     conn.commit()
     cur.close()
@@ -496,9 +522,8 @@ def repondre_demande(data: dict):
         return {"error": "Non autorisé"}
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("""
-        UPDATE demandes SET statut = %s, message_admin = %s WHERE id = %s
-    """, (data.get("statut"), data.get("message_admin", ""), data.get("id")))
+    cur.execute("UPDATE demandes SET statut = %s, message_admin = %s WHERE id = %s",
+        (data.get("statut"), data.get("message_admin", ""), data.get("id")))
     conn.commit()
     cur.close()
     conn.close()
@@ -595,7 +620,3 @@ def delete_presentation(user_id: str, token: str = ""):
     cur.close()
     conn.close()
     return {"success": True}
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8080)
