@@ -281,6 +281,75 @@ def update_event(data: dict):
     conn.close()
     return {"success": True}
 
+# ─── CHAT ─────────────────────────────────────────────────────────────────────
+
+def init_chat_db():
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS messages (
+            id SERIAL PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            username TEXT,
+            content TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    """)
+    conn.commit()
+    cur.close()
+    conn.close()
+
+init_chat_db()
+
+@app.get("/chat/messages")
+def get_messages():
+    conn = get_db()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT * FROM messages ORDER BY created_at DESC LIMIT 50")
+    messages = cur.fetchall()
+    cur.close()
+    conn.close()
+    return [dict(m) for m in reversed(messages)]
+
+@app.post("/chat/send")
+def send_message(data: dict):
+    user_id = data.get("user_id")
+    content = data.get("content", "").strip()
+    if not user_id or not content:
+        return {"error": "Paramètres invalides"}
+    if len(content) > 500:
+        return {"error": "Message trop long"}
+    # Vérifier que le membre existe
+    conn = get_db()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT * FROM players WHERE user_id = %s AND xp >= 0", (user_id,))
+    player = cur.fetchone()
+    if not player:
+        cur.close()
+        conn.close()
+        return {"error": "Membre introuvable"}
+    cur.execute("""
+        INSERT INTO messages (user_id, username, content)
+        VALUES (%s, %s, %s) RETURNING *
+    """, (user_id, data.get("username", f"#{user_id[-6:]}"), content))
+    msg = cur.fetchone()
+    conn.commit()
+    cur.close()
+    conn.close()
+    return dict(msg)
+
+@app.delete("/chat/messages/{msg_id}")
+def delete_message(msg_id: int, token: str = ""):
+    if token != "ghost_admin_token_2026":
+        return {"error": "Non autorisé"}
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM messages WHERE id = %s", (msg_id,))
+    conn.commit()
+    cur.close()
+    conn.close()
+    return {"success": True}
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8080)
