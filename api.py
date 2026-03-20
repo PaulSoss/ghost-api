@@ -199,6 +199,88 @@ def admin_resetxp(data: dict):
     conn.close()
     return {"success": True}
     
+# ─── ÉVÉNEMENTS ───────────────────────────────────────────────────────────────
+
+def init_events_db():
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS events (
+            id SERIAL PRIMARY KEY,
+            titre TEXT NOT NULL,
+            description TEXT,
+            date_debut TIMESTAMP,
+            date_fin TIMESTAMP,
+            bonus_xp INTEGER DEFAULT 0,
+            statut TEXT DEFAULT 'a_venir',
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    """)
+    conn.commit()
+    cur.close()
+    conn.close()
+
+init_events_db()
+
+@app.get("/events")
+def get_events():
+    conn = get_db()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT * FROM events ORDER BY date_debut DESC")
+    events = cur.fetchall()
+    cur.close()
+    conn.close()
+    return [dict(e) for e in events]
+
+@app.post("/admin/events/create")
+def create_event(data: dict):
+    if data.get("token") != "ghost_admin_token_2026":
+        return {"error": "Non autorisé"}
+    conn = get_db()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("""
+        INSERT INTO events (titre, description, date_debut, date_fin, bonus_xp, statut)
+        VALUES (%s, %s, %s, %s, %s, %s) RETURNING *
+    """, (
+        data.get("titre"),
+        data.get("description"),
+        data.get("date_debut"),
+        data.get("date_fin"),
+        data.get("bonus_xp", 0),
+        data.get("statut", "a_venir")
+    ))
+    event = cur.fetchone()
+    conn.commit()
+    cur.close()
+    conn.close()
+    return dict(event)
+
+@app.post("/admin/events/delete")
+def delete_event(data: dict):
+    if data.get("token") != "ghost_admin_token_2026":
+        return {"error": "Non autorisé"}
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM events WHERE id = %s", (data.get("id"),))
+    conn.commit()
+    cur.close()
+    conn.close()
+    return {"success": True}
+
+@app.post("/admin/events/update")
+def update_event(data: dict):
+    if data.get("token") != "ghost_admin_token_2026":
+        return {"error": "Non autorisé"}
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE events SET statut = %s WHERE id = %s
+    """, (data.get("statut"), data.get("id")))
+    conn.commit()
+    cur.close()
+    conn.close()
+    return {"success": True}
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8080)
