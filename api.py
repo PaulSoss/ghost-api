@@ -2,7 +2,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import psycopg2
 from psycopg2.extras import RealDictCursor
-import os
 
 app = FastAPI()
 
@@ -13,7 +12,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ─── USERNAMES ────────────────────────────────────────────────────────────────
+# ─── USERNAMES PAR DÉFAUT ────────────────────────────────────────────────────
 
 USERNAMES = {
     "746732917828354220": "Mazaa",
@@ -57,8 +56,13 @@ def init_db():
             xp INTEGER DEFAULT 0,
             level INTEGER DEFAULT 1,
             total_kills INTEGER DEFAULT 0,
-            total_captures INTEGER DEFAULT 0
+            total_captures INTEGER DEFAULT 0,
+            username TEXT
         )
+    """)
+    # Ajouter la colonne username si elle n'existe pas encore
+    cur.execute("""
+        ALTER TABLE players ADD COLUMN IF NOT EXISTS username TEXT
     """)
     conn.commit()
     cur.close()
@@ -88,14 +92,16 @@ def xp_in_current_level(xp: int, level: int) -> int:
         spent += xp_for_next_level(l)
     return xp - spent
 
-def get_username(user_id: str) -> str:
+def get_username(user_id: str, db_username: str = None) -> str:
+    if db_username:
+        return db_username
     return USERNAMES.get(user_id, f"#{user_id[-6:]}")
 
 # ─── INIT ─────────────────────────────────────────────────────────────────────
 
 init_db()
 
-# ─── ROUTES ───────────────────────────────────────────────────────────────────
+# ─── ROUTES PRINCIPALES ───────────────────────────────────────────────────────
 
 @app.get("/")
 def root():
@@ -118,7 +124,7 @@ def classement():
         result.append({
             "rank": i + 1,
             "user_id": p["user_id"],
-            "username": get_username(p["user_id"]),
+            "username": get_username(p["user_id"], p.get("username")),
             "xp": xp_total,
             "level": level,
             "grade": get_grade(level),
@@ -145,7 +151,7 @@ def profil(user_id: str):
     xp_needed = xp_for_next_level(level)
     return {
         "user_id": p["user_id"],
-        "username": get_username(p["user_id"]),
+        "username": get_username(p["user_id"], p.get("username")),
         "xp": xp_total,
         "level": level,
         "grade": get_grade(level),
@@ -154,6 +160,27 @@ def profil(user_id: str):
         "xp_current": xp_current,
         "xp_needed": xp_needed,
     }
+
+@app.post("/profil/username")
+def set_username(data: dict):
+    user_id = data.get("user_id")
+    username = data.get("username", "").strip()
+    if not user_id or not username:
+        return {"error": "ID et pseudo requis"}
+    if len(username) > 30:
+        return {"error": "Pseudo trop long (max 30 caractères)"}
+    conn = get_db()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT * FROM players WHERE user_id = %s", (user_id,))
+    if not cur.fetchone():
+        cur.close()
+        conn.close()
+        return {"error": "Membre introuvable — soumet d'abord un rapport sur Discord"}
+    cur.execute("UPDATE players SET username = %s WHERE user_id = %s", (username, user_id))
+    conn.commit()
+    cur.close()
+    conn.close()
+    return {"success": True, "username": username}
 
 @app.get("/stats")
 def stats():
@@ -359,11 +386,12 @@ def send_message(data: dict):
     conn = get_db()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     cur.execute("SELECT * FROM players WHERE user_id = %s", (user_id,))
-    if not cur.fetchone():
+    player = cur.fetchone()
+    if not player:
         cur.close()
         conn.close()
         return {"error": "Membre introuvable"}
-    username = get_username(user_id)
+    username = get_username(user_id, player.get("username"))
     cur.execute("INSERT INTO messages (user_id, username, content) VALUES (%s, %s, %s) RETURNING *",
         (user_id, username, content))
     msg = cur.fetchone()
@@ -426,11 +454,12 @@ def add_clip(data: dict):
     conn = get_db()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     cur.execute("SELECT * FROM players WHERE user_id = %s", (user_id,))
-    if not cur.fetchone():
+    player = cur.fetchone()
+    if not player:
         cur.close()
         conn.close()
         return {"error": "Membre introuvable"}
-    username = get_username(user_id)
+    username = get_username(user_id, player.get("username"))
     cur.execute("""
         INSERT INTO clips (user_id, username, titre, description, url, type)
         VALUES (%s, %s, %s, %s, %s, %s) RETURNING *
