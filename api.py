@@ -516,6 +516,86 @@ def delete_demande(demande_id: int, token: str = ""):
     conn.close()
     return {"success": True}
 
+# ─── PRÉSENTATIONS ────────────────────────────────────────────────────────────
+
+def init_presentations_db():
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS presentations (
+            id SERIAL PRIMARY KEY,
+            user_id TEXT UNIQUE NOT NULL,
+            pseudo TEXT NOT NULL,
+            plateforme TEXT NOT NULL,
+            classe TEXT NOT NULL,
+            style TEXT NOT NULL,
+            arme TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    """)
+    conn.commit()
+    cur.close()
+    conn.close()
+
+init_presentations_db()
+
+@app.get("/presentations")
+def get_presentations():
+    conn = get_db()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("""
+        SELECT p.*, pl.xp, pl.level
+        FROM presentations p
+        LEFT JOIN players pl ON p.user_id = pl.user_id
+        ORDER BY p.created_at DESC
+    """)
+    presentations = cur.fetchall()
+    cur.close()
+    conn.close()
+    return [dict(p) for p in presentations]
+
+@app.post("/presentations/submit")
+def submit_presentation(data: dict):
+    user_id = data.get("user_id")
+    if not user_id:
+        return {"error": "ID requis"}
+    conn = get_db()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT * FROM players WHERE user_id = %s", (user_id,))
+    if not cur.fetchone():
+        cur.close()
+        conn.close()
+        return {"error": "Membre introuvable"}
+    cur.execute("""
+        INSERT INTO presentations (user_id, pseudo, plateforme, classe, style, arme)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        ON CONFLICT (user_id) DO UPDATE
+        SET pseudo=%s, plateforme=%s, classe=%s, style=%s, arme=%s
+        RETURNING *
+    """, (
+        user_id, data.get("pseudo"), data.get("plateforme"),
+        data.get("classe"), data.get("style"), data.get("arme"),
+        data.get("pseudo"), data.get("plateforme"),
+        data.get("classe"), data.get("style"), data.get("arme")
+    ))
+    pres = cur.fetchone()
+    conn.commit()
+    cur.close()
+    conn.close()
+    return dict(pres)
+
+@app.delete("/presentations/{user_id}")
+def delete_presentation(user_id: str, token: str = ""):
+    if token != "ghost_admin_token_2026":
+        return {"error": "Non autorisé"}
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM presentations WHERE user_id = %s", (user_id,))
+    conn.commit()
+    cur.close()
+    conn.close()
+    return {"success": True}
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8080)
